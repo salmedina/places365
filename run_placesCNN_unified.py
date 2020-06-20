@@ -1,6 +1,7 @@
 # PlacesCNN to predict the scene category, attribute, and class activation map in a single pass
 # by Bolei Zhou, sep 2, 2017
 
+import argparse
 import torch
 from torch.autograd import Variable as V
 import torchvision.models as models
@@ -10,6 +11,12 @@ import os
 import numpy as np
 import cv2
 from PIL import Image
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-i', '--image', type=str, help='Path to the input image to be processed')
+    parser.add_argument('-c', '--cam_path', type=str, default='cam.jpg', help='')
+    return parser.parse_args()
 
 
 def load_labels():
@@ -96,24 +103,14 @@ def load_model():
     model.load_state_dict(state_dict)
     model.eval()
 
-
-
-    # the following is deprecated, everything is migrated to python36
-
-    ## if you encounter the UnicodeDecodeError when use python3 to load the model, add the following line will fix it. Thanks to @soravux
-    #from functools import partial
-    #import pickle
-    #pickle.load = partial(pickle.load, encoding="latin1")
-    #pickle.Unpickler = partial(pickle.Unpickler, encoding="latin1")
-    #model = torch.load(model_file, map_location=lambda storage, loc: storage, pickle_module=pickle)
-
-    model.eval()
     # hook the feature extractor
-    features_names = ['layer4','avgpool'] # this is the last conv layer of the resnet
+    features_names = ['layer4', 'avgpool'] # this is the last conv layer of the resnet
     for name in features_names:
         model._modules.get(name).register_forward_hook(hook_feature)
     return model
 
+#---- MAIN ---------------------------------------------------------------------
+opts = parse_args()
 
 # load the labels
 classes, labels_IO, labels_attribute, W_attribute = load_labels()
@@ -131,9 +128,7 @@ weight_softmax = params[-2].data.numpy()
 weight_softmax[weight_softmax<0] = 0
 
 # load the test image
-img_url = 'http://places.csail.mit.edu/demo/6.jpg'
-os.system('wget %s -q -O test.jpg' % img_url)
-img = Image.open('test.jpg')
+img = Image.open(opts.image)
 input_img = V(tf(img).unsqueeze(0))
 
 # forward pass
@@ -143,7 +138,7 @@ probs, idx = h_x.sort(0, True)
 probs = probs.numpy()
 idx = idx.numpy()
 
-print('RESULT ON ' + img_url)
+print('RESULT ON ' + opts.image)
 
 # output the IO prediction
 io_image = np.mean(labels_IO[idx[:10]]) # vote for the indoor or outdoor
@@ -161,16 +156,15 @@ for i in range(0, 5):
 responses_attribute = W_attribute.dot(features_blobs[1])
 idx_a = np.argsort(responses_attribute)
 print('--SCENE ATTRIBUTES:')
-print(', '.join([labels_attribute[idx_a[i]] for i in range(-1,-10,-1)]))
-
+print(', '.join([labels_attribute[idx_a[i]] for i in range(-1, -10, -1)]))
 
 # generate class activation mapping
-print('Class activation map is saved as cam.jpg')
+print(f'Class activation map is saved at {opts.cam_path}')
 CAMs = returnCAM(features_blobs[0], weight_softmax, [idx[0]])
 
 # render the CAM and output
-img = cv2.imread('test.jpg')
+img = cv2.imread(opts.image)
 height, width, _ = img.shape
 heatmap = cv2.applyColorMap(cv2.resize(CAMs[0],(width, height)), cv2.COLORMAP_JET)
 result = heatmap * 0.4 + img * 0.5
-cv2.imwrite('cam.jpg', result)
+cv2.imwrite(opts.cam_path, result)
